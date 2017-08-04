@@ -1,13 +1,12 @@
 /*
- * 1WireTempDisp.cpp
- * Firmware for Remote Display unit
- * Firmware enables display unit act as standalone
- * Temperature display
- * Created: 29.7.2017 18.20.52
- * Author : Ketturi Electronics
- */ 
+* 1WireTempDisp.cpp
+* Firmware for EKA161 Remote Display unit
+* Enables display unit act as standalone DS18b20 thermometer.
+* Created: 29.7.2017 18.20.52
+* Author : Ketturi Electronics
+*/
 
-# define F_CPU 8000000UL
+# define F_CPU 4000000UL
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -16,11 +15,15 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
+#include <avr/wdt.h>
 
-#include "display.h"
-#include "ds1820.h"
+#include "include/display.h"
+#include "include/ds18b20/ds18b20.h"
 
-char digit[4] = {14, 16, 16} ; //Buffer for display output digits, initially shows "Err" message
+#define READ_INTERVALL_MS 1000 //Time between temperature readings
+#define OVER_TEMP 500		   //Temperature warning, degC * 10
+
+char buffer[4] = {9, 9, 9} ; //Buffer for display output digits, initially shows "888" message
 
 //Sets indicator leds in bitfield
 struct indicator_leds {
@@ -38,11 +41,11 @@ void timer0_init() //Set and start multiplex timer
 	cli(); //disable global interrupts
 	
 	//set compare match register to desired timer count:
-	OCR0A = 25; //F_CPU / 1024 / 50Hz
+	OCR0A = 52; //F_CPU / 256 / 300Hz
 	TCCR0A = 0x02; //Turnt on CTC mode
 	TIFR |= 0x01; //Clear interupt flag
 	TIMSK = 0x01; //enable timer compare interrupt
-	TCCR0B = 0x05; //Set CS10 and CS12 bits for 1024 prescaler
+	TCCR0B = 0x04; //Set CS10 and CS12 bits for 1024 prescaler
 	
 	//Set button interrupt input
 	//GIMSK |=  (1 << INT0); //Enable INT0 vector
@@ -59,92 +62,98 @@ ISR (TIMER0_COMPA_vect){
 	
 	switch(activedisplay){ //Decode status leds to multiplex matrix
 		case 0:
-			dg2 = flag_leds.led_neg;
-			dg1 = flag_leds.led_1;
+		dg2 = flag_leds.led_neg;
+		dg1 = flag_leds.led_1;
 		break;
 		case 1:
-			dg2 = flag_leds.led_dec;
-			dg1 = flag_leds.led_3;
+		dg2 = flag_leds.led_dec;
+		dg1 = flag_leds.led_3;
 		break;
 		case 2:
-			dg2 = flag_leds.led_2;
-			dg1 = flag_leds.led_4;
+		dg2 = flag_leds.led_2;
+		dg1 = flag_leds.led_4;
 		break;
 	}
 	
-	display_putc(digit[activedisplay],dg1,dg2);
+	display_putc(buffer[activedisplay],dg1,dg2);
 }
 
-//ISR (INT0_vect){ //does nothing at this moment
+//ISR (INT0_vect){ //Interupt for buttons
+//does nothing, but everytime triggered activedisplay corresponds button
 //}
 
 //Formats number as ascii with leading spaces
-void formatnumber(int n, char* buf, int bufsize) {
-	memset(buf, 0x00, bufsize); //set leading space
+void print(int n) {
+	memset(buffer, 0x00, 4); //Set leading space
 	int len=0;
 	int tmp = n;
 	if (n<0) {
 		tmp = -n;
 	}
 	do {
-		buf[len++] = tmp%10 +'0';
+		buffer[len++] = tmp%10+1; //add number to buffer
 		tmp/=10;
-	} while(tmp && len<bufsize-1);
-	/*if (tmp || len==bufsize-1 && n<0) {
-		// error, number too large
-		memset(buf, 'E', bufsize);
-		buf[bufsize-1] = 0;
-		return;
-	}*/
+	} while(tmp && len<4-1);
 	//Negative sign when negative number
 	if (n<0)	flag_leds.led_neg = 1;
 	else		flag_leds.led_neg = 0;
 	// reverse numbers
-	for(int i=0, j=bufsize-2; i<j; i++, j--) {
-		char c = buf[i];
-		buf[i] = buf[j];
-		buf[j] = c;
+	for(int i=0, j=4-2; i<j; i++, j--) {
+		char c = buffer[i];
+		buffer[i] = buffer[j];
+		buffer[j] = c;
 	}
-	buf[bufsize-1] = 0;
+	buffer[4-1] = 0;
 }
 
-int floattodec(signed int input){ //converts 99.9 float to int for screen with decimal
-	short int output;
-	if (input > -100 && input < 100){ //if value [-99.9,99.9] show with 1st decimal
-		output = input * 10; //move decimal point to left
+void print_decimal(int16_t input){ //converts 99.9 float to int for screen with decimal
+	int16_t output;
+	if (input >= OVER_TEMP) //Set temperature warning if temperature reaches point
+	flag_leds.led_1 = 1;
+	
+	if (input > -1000 && input < 1000){ //if value [-99.9,99.9] show with 1st decimal
+		output = input; //move decimal point to left
 		flag_leds.led_dec = 1;
 	}
 	else { //if value is [[-999,-100][100,999]] then do not show decimal
 		flag_leds.led_dec = 0;
-		output = input;
+		output = input/10;
 	}
-	return output;
+	print(output);
 }
 
 
-/** The main loop. Sets up the 1-wire bus, then loops forever reading and displaying temperatures. */
+
+// The main loop. Sets up hardware, then loops forever reading and displaying temperatures.
 int main(void) {
-	display_init(); //Initialise 7-segment display IO pins
+	wdt_enable(WDTO_4S); //Enable watch dog with 4S countdown
+	
+	display_init(); //Initialize 7-segment display IO pins
 	timer0_init();  //Initialize timer and start multiplexing display
-	static OWI_device devices[MAX_DEVICES];
-	OWI_device *	  ds1820;
-	signed int		  temperature = 0;
+	
+	int temperature = 0;
+	char errorcode = 0;
+	
+	ds18b20wsp( NULL, 0, 100, DS18B20_RES12); //Set resolution of sensor
+	
+	while((errorcode = ds18b20convert(NULL)) == DS18B20_ERROR_OK) {
+		flag_leds.led_4 = 0;
+		_delay_ms(READ_INTERVALL_MS); //delay of sensor reading interval
+		flag_leds.led_4 = 1;
 		
-	OWI_Init(BUSES);
-	// Do the bus search until all ids are read without crc error.
-	while (SearchBuses(devices, MAX_DEVICES, BUSES) != SEARCH_SUCCESSFUL) {
-	}
-
-	// See if there is a DS1820 on a bus.
-	ds1820 = FindFamily(DS1820_FAMILY_ID, devices, MAX_DEVICES);
-			
-	for(;;){ 
-		if (ds1820 != NULL) {
-			temperature =  DS1820_ReadTemperature((*ds1820).bus, (*ds1820).id) / 2;
-			formatnumber(floattodec(temperature), digit, 4); //formats value to ascii for 7-segment
+		if((errorcode = ds18b20read( NULL, &temperature)) == DS18B20_ERROR_OK){
+			print_decimal(temperature*10/16); //Output temperature with 1 decimal
+			wdt_reset(); //Reset watchdog
+		}	
+		else{
+			break;
 		}
-		_delay_ms(500);		
-
 	}
+
+	//Show error if conversion fails and wait watchdog reset
+	buffer[0] = 15;
+	buffer[1] = 17;
+	buffer[2] = errorcode+1;
+	_delay_ms(4000);
 }
 
