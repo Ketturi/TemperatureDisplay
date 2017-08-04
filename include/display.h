@@ -45,6 +45,7 @@
 //functions
 extern void display_init();
 extern void display_setfirstdigit();
+extern uint8_t display_getactivedigit();
 extern void display_putc(char, uint8_t, uint8_t);
 extern void display_puthex(uint8_t);
 extern uint8_t display_selnextdigit();

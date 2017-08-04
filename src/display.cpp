@@ -50,6 +50,10 @@ void display_setfirstdigit()
 	display_activedigit = 0;
 }
 
+uint8_t display_getactivedigit(){
+	return display_activedigit;
+}
+
 //Outputs ascii character to segment lines
 void display_putc(char c, uint8_t dg1, uint8_t dg2)
 {
