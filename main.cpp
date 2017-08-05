@@ -4,6 +4,7 @@
 * Enables display unit act as standalone DS18b20 thermometer.
 * Created: 29.7.2017 18.20.52
 * Author : Ketturi Electronics
+* Firmware revision 3
 */
 
 # define F_CPU 4000000UL
@@ -22,12 +23,12 @@
 #include "include/ds18b20/ds18b20.h"
 
 #define READ_INTERVALL_MS 1000 //Time between temperature readings
-#define OVER_TEMP 500		   //Temperature warning, degC * 10
 
-char buffer[4] = {9, 9, 9} ; //Buffer for display output digits, initially shows "888" message
+char buffer[4] = {16, 17, 4} ; //Buffer for display output digits
 
 int temp_max = 0;			//Maximum temperature variable
 uint16_t EEMEM nv_temp_max;	//Non volatile maximum temperature stored in EEPROM
+uint8_t eeprom_counter = 0;
 
 //prototypes
 void timer0_init(void);
@@ -129,8 +130,6 @@ void print(int n) {
 //Moves digits and adds 1st decimal
 void print_decimal(int16_t input){
 	int16_t output;
-	if (input >= OVER_TEMP) //Set temperature warning if temperature reaches point
-	flag_leds.led_1 = 1;
 	
 	if (input > -1000 && input < 1000){ //if value [-99.9,99.9] show with 1st decimal
 		output = input; //move decimal point to left
@@ -169,7 +168,9 @@ int main(void) {
 		//Clear stored maximum value if both buttons are pressed
 		if (flag_leds.button_up && flag_leds.button_dn){
 			temp_max = 0;
-			flag_leds.led_3 = 1;
+			flag_leds.led_3 = 1;     //Set EEPROM indicator
+			eeprom_write_word(&nv_temp_max, temp_max); //Write new maximum temp to EEPROM
+			eeprom_busy_wait(); //Wait while EEPROM is being programmed
 			_delay_ms(500);
 			flag_leds.led_3 = 0;
 			flag_leds.button_up = flag_leds.button_dn = 0;
@@ -190,15 +191,24 @@ int main(void) {
 			flag_leds.button_up = flag_leds.button_dn = 0;
 		}
 		
+		eeprom_counter++;
+		if (eeprom_counter >= 60 ){ //Check if ~minute is elapsed
+			if (eeprom_read_word(&nv_temp_max) < temp_max){ //Check if eeprom value needs update
+				flag_leds.led_3 = 1;     //Set EEPROM indicator
+				eeprom_write_word(&nv_temp_max, temp_max); //Write new maximum temp to EEPROM
+				eeprom_busy_wait(); //Wait while EEPROM is being programmed
+				flag_leds.led_3 = 0;
+			}
+			eeprom_counter = 0;
+		}
+		
 		//Get temperature and handle it
 		if((errorcode = ds18b20read( NULL, &temperature)) == DS18B20_ERROR_OK){
 			
 			if (temperature > temp_max){ //Check if new maximum value is reached
 				temp_max = temperature;
-				flag_leds.led_3 = 1;     //Set EEPROM indicator
-				eeprom_write_word(&nv_temp_max, temp_max); //Write new maximum temp to EEPROM
-				flag_leds.led_3 = 0;
-				eeprom_busy_wait(); //Wait while EEPROM is being programmed
+				//Set temperature notification if new high is reached
+				flag_leds.led_1 = 1;
 			}
 			
 			print_decimal(temperature*10/16); //Output temperature with 1 decimal

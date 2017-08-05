@@ -1,0 +1,9 @@
+*.eep
+Release/1WireTempDisp.elf
+*.lss
+Release/1WireTempDisp.map
+*.srec
+*.d
+Release/src/romsearch.o
+*.o
+*.mk
